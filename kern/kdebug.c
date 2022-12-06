@@ -143,6 +143,7 @@ debuginfo_eip(uintptr_t addr, struct Eipdebuginfo *info)
 	if (lfile == 0)
 		return -1;
 
+
 	// Search within that file's stabs for the function definition
 	// (N_FUN).
 	lfun = lfile;
@@ -196,11 +197,18 @@ debuginfo_eip(uintptr_t addr, struct Eipdebuginfo *info)
 
 	// Set eip_fn_narg to the number of arguments taken by the function,
 	// or 0 if there was no containing function.
-	if (lfun < rfun)
+	// if (lfun < rfun)
 		for (lline = lfun + 1;
 		     lline < rfun && stabs[lline].n_type == N_PSYM;
 		     lline++)
 			info->eip_fn_narg++;
+
+	stab_binsearch(stabs, &lfun, &rfun, N_SLINE, addr - info->eip_fn_addr);
+
+    if (lfun <= rfun)
+    {
+        info->eip_line = stabs[lfun].n_desc;
+    }
 
 	return 0;
 }
