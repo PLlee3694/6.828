@@ -178,7 +178,8 @@ mem_init(void)
 	//      (ie. perm = PTE_U | PTE_P)
 	//    - pages itself -- kernel RW, user NONE
 	// Your code goes here:
-
+	boot_map_region(kern_pgdir, UPAGES, PTSIZE, PADDR(pages), PTE_U);
+	
 	//////////////////////////////////////////////////////////////////////
 	// Use the physical memory that 'bootstack' refers to as the kernel
 	// stack.  The kernel stack grows down from virtual address KSTACKTOP.
@@ -190,7 +191,8 @@ mem_init(void)
 	//       overwrite memory.  Known as a "guard page".
 	//     Permissions: kernel RW, user NONE
 	// Your code goes here:
-
+	boot_map_region(kern_pgdir, KSTACKTOP-KSTKSIZE, KSTKSIZE, PADDR(bootstack), PTE_W);
+	boot_map_region(kern_pgdir, KERNBASE, 0xffffffff - KERNBASE, 0, PTE_W);
 	//////////////////////////////////////////////////////////////////////
 	// Map all of physical memory at KERNBASE.
 	// Ie.  the VA range [KERNBASE, 2^32) should map to
@@ -364,11 +366,25 @@ page_decref(struct PageInfo* pp)
 // Hint 3: look at inc/mmu.h for useful macros that manipulate page
 // table and page directory entries.
 //
+
+//modified
 pte_t *
 pgdir_walk(pde_t *pgdir, const void *va, int create)
 {
 	// Fill this function in
-	return NULL;
+	pde_t *pgdir_entry = pgdir + PDX(va);
+    if (!(*pgdir_entry & PTE_P)) {
+        if (!create)
+            return NULL;
+        else {
+            struct PageInfo *new_page = page_alloc(1);
+            if (!new_page)
+                return NULL;
+            *pgdir_entry = (page2pa(new_page) | PTE_P | PTE_W | PTE_U);
+            ++new_page->pp_ref;
+        }
+    }
+    return (pte_t *)(KADDR(PTE_ADDR(*pgdir_entry))) + PTX(va);
 }
 
 //
@@ -382,10 +398,19 @@ pgdir_walk(pde_t *pgdir, const void *va, int create)
 // mapped pages.
 //
 // Hint: the TA solution uses pgdir_walk
+
+//modified
 static void
 boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm)
 {
 	// Fill this function in
+	int offset;
+    pte_t *pgtable_entry;
+    for (offset = 0; offset < size; offset += PGSIZE, va += PGSIZE, pa += PGSIZE) {
+        pgtable_entry = pgdir_walk(pgdir, (void *)va, 1);
+        //pgtable_entry中存着一条物理地址，指向一个page。这个page里面指向具体的所有虚拟地址与物理地址的映射。需要的大小位1024*4KB = 4MB就能管理全部的映射关系。
+        *pgtable_entry = (pa | perm | PTE_P);
+    }
 }
 
 //
@@ -413,11 +438,22 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
 // Hint: The TA solution is implemented using pgdir_walk, page_remove,
 // and page2pa.
 //
+//modified
 int
 page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 {
 	// Fill this function in
-	return 0;
+	pte_t *pgtable_entry = pgdir_walk(pgdir, va, 1);
+    if (!pgtable_entry)
+        return -E_NO_MEM;
+    ++pp->pp_ref;
+    if ((*pgtable_entry) & PTE_P) {
+        tlb_invalidate(pgdir, va);
+        page_remove(pgdir, va);
+    }
+    *pgtable_entry = (page2pa(pp) | perm | PTE_P);
+    *(pgdir + PDX(va)) |= perm;
+    return 0;
 }
 
 //
@@ -431,11 +467,18 @@ page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 //
 // Hint: the TA solution uses pgdir_walk and pa2page.
 //
+
+//modified
 struct PageInfo *
 page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 {
 	// Fill this function in
-	return NULL;
+	 pte_t *pgtable_entry = pgdir_walk(pgdir, va, 0);
+    if (!pgtable_entry || !(*pgtable_entry & PTE_P))
+        return NULL;
+    if (pte_store)
+        *pte_store = pgtable_entry;
+    return pa2page(PTE_ADDR(*pgtable_entry));
 }
 
 //
@@ -453,10 +496,19 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 // Hint: The TA solution is implemented using page_lookup,
 // 	tlb_invalidate, and page_decref.
 //
+
+//modified
 void
 page_remove(pde_t *pgdir, void *va)
 {
 	// Fill this function in
+	pte_t *pgtable_entry;
+    struct PageInfo *page = page_lookup(pgdir, va, &pgtable_entry);
+    if (!page)
+        return;
+    page_decref(page);
+    tlb_invalidate(pgdir, va);
+    *pgtable_entry = 0;
 }
 
 //
